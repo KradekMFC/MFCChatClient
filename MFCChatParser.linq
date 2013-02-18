@@ -14,12 +14,10 @@ void Main()
 {
 
 	var mfc = new MFCClient();
-//	mfc.Received += (s,e)=>
-//	{
-//		if (e.Message.MessageType == MFCMessageType.FCTYPE_CMESG)
-//			e.Message.Dump();
-//	};
-	mfc.JoinModelChatRoom("JALYN", (s,e)=>{e.Message.Dump();});
+
+	mfc.JoinModelChatRoom("CrazySysy", (m)=>{if (m.IsTip) m.Dump();});
+	mfc.JoinModelChatRoom("AedanRayne", (m)=>{if (m.IsTip) m.Dump();});
+	mfc.JoinModelChatRoom("JulyStar", (m)=>{if (m.IsTip) m.Dump();});
 
 }
 
@@ -80,7 +78,7 @@ public class MFCClient
 		_msgsToSend.Enqueue(msg);
 	}
 	//JoinModelChatRoom takes a modelname and a handler for receiving messages
-	public void JoinModelChatRoom(String modelName, MFCMessageEventHandler onReceived)
+	public void JoinModelChatRoom(String modelName, ChatMessageHandler onMsg)
 	{
 		//wait until we actually have a model list
 		while(null == Models){} //TODO: change this so we don't get into an infinite loop
@@ -104,8 +102,26 @@ public class MFCClient
 		//Set up a filtered handler that only sends chat room messages
 		Received += (sender, e) => 
 		{
-			if (e.Message.MessageType == MFCMessageType.FCTYPE_CMESG && e.Message.To == broadcasterId)
-				onReceived(sender,e);
+			//leave if this is not a message for our room
+			if (e.Message.MessageType != MFCMessageType.FCTYPE_CMESG || e.Message.To != broadcasterId)
+				return;
+			
+			//leave if there is no message data
+			if ("" == e.Message.Data || null == e.Message.Data)
+				return;
+
+			try
+			{
+				var decoded = WebUtility.UrlDecode(e.Message.Data);
+				var msg = JsonConvert.DeserializeObject<ChatMessage>(decoded); 
+				onMsg(msg);
+			}
+			catch (Exception err)
+			{
+				err.Dump();
+				e.Message.Dump();
+			}
+				
 		};
 	}
 	
@@ -225,6 +241,7 @@ public class MFCMessageEventArgs : EventArgs
 {
 	public MFCMessage Message { get; set; }
 }
+public delegate void ChatMessageHandler(ChatMessage m);
 
 //helper class for parsing MFC responses
 public class MFCChatResponse
@@ -350,6 +367,21 @@ public enum MFCResponseType
   	FCRESPONSE_ERROR = 1,
   	FCRESPONSE_NOTICE = 2
 }
+public enum MFCVideoState
+{
+	FCVIDEO_TX_IDLE = 0,
+	FCVIDEO_TX_RESET = 1,
+	FCVIDEO_TX_AWAY = 2,
+	FCVIDEO_TX_CONFIRMING = 11,
+	FCVIDEO_TX_PVT = 12,
+	FCVIDEO_TX_GRP = 13,
+	FCVIDEO_TX_KILLMODEL = 15,
+	FCVIDEO_RX_IDLE = 90,
+	FCVIDEO_RX_PVT = 91,
+	FCVIDEO_RX_VOY = 92,
+	FCVIDEO_RX_GRP = 93,
+	FCVIDEO_UNKNOWN = 127
+}
 public enum MFCMessageType
 {
 	FCTYPE_NULL = 0,
@@ -418,6 +450,66 @@ public enum MFCMessageType
 	FCTYPE_DISCONNECTED = 98,
 	FCTYPE_LOGOUT = 99
 }
+//for future reference
+//public enum MFCFonts
+// 0: { name: 'Arial' },
+// 2: { name: 'Comic Sans MS' },
+// 3: { name: 'Courier New' },
+// 4: { name: 'Georgia' },
+// 5: { name: 'Lucida Console, Monaco' },
+// 6: { name: 'Lucida Sans Unicode' },
+// 7: { name: 'MS Sans Serif' },
+// 8: { name: 'Palatino Linotype, Book Antiqua' },
+// 9: { name: 'Tahoma, Geneva' },
+// 10: { name: 'Times New Roman' },
+// 11: { name: 'Helvetica' },
+// 12: { name: 'Verdana' },
+// 13: { name: 'Arial Narrow' },
+// 15: { name: 'Book Antiqua' },
+// 16: { name: 'Bookman Old Style' },
+// 17: { name: 'Bradley Hand ITC' },
+// 18: { name: 'Century Gothic' },
+// 19: { name: 'Copperplate Gothic Bold', no_bold:1 },
+// 20: { name: 'Copperplate Gothic Light' },
+// 21: { name: 'Engravers MT' },
+// 22: { name: 'Eras Demi ITC' },
+// 23: { name: 'Eras Light ITC' },
+// 24: { name: 'Estrangelo Edessa' },
+// 25: { name: 'Eurostile' },
+// 26: { name: 'Felix Titling' },
+// 27: { name: 'Fixedsys' },
+// 28: { name: 'Franklin Gothic Book' },
+// 29: { name: 'Franklin Gothic Demi', no_bold:1 },
+// 30: { name: 'Franklin Gothic Demi Cond' },
+// 31: { name: 'Franklin Gothic Medium' },
+// 32: { name: 'Franklin Gothic Medium Cond' },
+// 33: { name: 'Garamond' },
+// 35: { name: 'Kristen ITC' },
+// 36: { name: 'Latha, Mangal' },
+// 37: { name: 'Lucida Sans' },
+// 38: { name: 'Lucida Sans Unicode,Lucida Grande' },
+// 39: { name: 'Maiandra GD' },
+// 41: { name: 'Microsoft Sans Serif' },
+// 42: { name: 'Monospace' },
+// 43: { name: 'Monotype Corsiva', no_bold:1 },
+// 44: { name: 'MS Reference Sans Serif' },
+// 45: { name: 'MS Serif,New York' },
+// 46: { name: 'MV Boli' },
+// 47: { name: 'OCR A Extended' },
+// 48: { name: 'Papyrus' },
+// 49: { name: 'Perpetua' },
+// 50: { name: 'Raavi' },
+// 51: { name: 'Rockwell' },
+// 52: { name: 'Sans-serif' },
+// 53: { name: 'Serif' },
+// 54: { name: 'Shruti' },
+// 55: { name: 'Sydnie' },
+// 56: { name: 'Sylfaen' },
+// 57: { name: 'System' },
+// 58: { name: 'Tempus Sans ITC' },
+// 60: { name: 'Times' },
+// 61: { name: 'Trebuchet MS' }
+
 
 //javascript deserialization classes
 public sealed class ChatRoomMsg
@@ -472,5 +564,36 @@ public sealed class M
 	public string topic { get; set; }
 }
 
+public class UserChatOptions
+{
+	[JsonProperty(PropertyName = "chat_color")]
+    public string ChatColor { get; set; }
+	[JsonProperty(PropertyName = "chat_font")]
+    public int ChatFont { get; set; }
+}
 
-
+public class ChatMessage
+{
+	[JsonProperty(PropertyName = "lv")]
+    public int AccessLevel { get; set; }
+	[JsonProperty(PropertyName = "msg")]
+    public string Message { get; set; }
+	[JsonProperty(PropertyName = "nm")]
+    public string Name { get; set; }
+	[JsonProperty(PropertyName = "sid")]
+    public int SessionID { get; set; }
+	[JsonProperty(PropertyName = "uid")]
+    public int UserID { get; set; }
+	[JsonProperty(PropertyName = "vs")]
+    public MFCVideoState VideoState { get; set; } 
+	[JsonProperty(PropertyName = "u")]
+    public UserChatOptions ChatOptions { get; set; }
+	[JsonIgnore]
+	public Boolean IsTip
+	{
+		get
+		{
+			return ("FCServer" == Name && Message.Contains("has tipped"));
+		}
+	}
+}
