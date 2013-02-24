@@ -12,24 +12,19 @@
   <Namespace>WebSocket4Net</Namespace>
 </Query>
 
+//TODO
+// handle sessionstate messages
+
 void Main()
 {
 	var mfc = new MFCClient();
-//	//testing multiple rooms
+	//Example room joins
 //	mfc.JoinModelChatRoom("Roxie18", (m)=>{ m.Dump(); });
-//	//mfc.JoinModelChatRoom("AwesomeKate", (m)=>{if (m.IsTip) m.Dump();});
-//	mfc.Received += (s,e) => {
-//		if (e.Message.MessageType != MFCMessageType.FCTYPE_SESSIONSTATE &&
-//			e.Message.MessageType != MFCMessageType.FCTYPE_TAGS)
-//		{
-//			e.Message.Dump();
-//		}
-//	};
-	mfc.JoinModelChatRoom("AbbeyRhode", (m)=>{m.Dump();});
+	mfc.JoinModelChatRoom("ParisLovely", (m)=>{ if (m.IsTip) m.Dump();});
 
-
+	//Working out SESSIONSTATE
 //	while(null == mfc.Models) {}
-//	
+	
 //	var models = new Dictionary<int, ModelInfo>();
 //	mfc.Received += (s,e) => 
 //	{
@@ -54,6 +49,7 @@ void Main()
 //		}
 //	};
 	
+	//Overview of message types received
 //	var msgCount = new Dictionary<MFCMessageType, int>();
 //	mfc.Received += (s,e) => 
 //	{
@@ -67,33 +63,29 @@ void Main()
 
 }
 
-public class Model
-{
-	public int UserID { get; set; }
-	public String Name {get; set;}
-}
-
 public class MFCClient
 {
 	//private properties
 	WebClient _client = new WebClient();
-	WebSocket _socket = new WebSocket("ws://xchat11.myfreecams.com:8080/fcsl");
+	WebSocket _socket;
 	
 	String _sessionId = "0";
-	//url format used for getting initial list of online models.  TODO: remove hardcoded xchat3
-	String modelsUrlFormat = "http://www.myfreecams.com/mfc2/php/mobj.php?f={0}&s=xchat11";
 
 	System.Timers.Timer _ping = new System.Timers.Timer(15000);
 	
 	//constructor
 	public MFCClient()
 	{
+		_socket = new WebSocket(WebsocketServerUrl);
+		
 		//setup up the socket
 		_socket.Opened += onSocketOpened;
 		_socket.Error += onSocketError;
 		_socket.MessageReceived += onSocketMessage;
 		
 		//set up a ping so the server doesn't close our connection
+		//MFC does it randomly between 10 and 20s--not sure why--
+		//here we're just doing it every 15s
 		_ping.Elapsed += onPing;
 		_ping.Enabled = true;
 		
@@ -104,7 +96,7 @@ public class MFCClient
 	
 	//public properties
 	public event MFCMessageEventHandler Received; //tap into the message feed
-	public int SessionID { get {return Int32.Parse(_sessionId);}}
+	public int SessionID { get {return Int32.Parse(_sessionId);}} //chat server session identifier
 	public IEnumerable<ModelInfo> Models { get; set; } //initial list of online models.  Need to figure out how to update
 	                                                   //it (likely FCTYPE_SESSIONSTATE messages)
 	private Boolean _connected = false;
@@ -115,7 +107,26 @@ public class MFCClient
 	public int UserId { get { return _userId; } } //MFCs identifer for the user
 	private String _userName;
 	public String UserName{ get { return _userName; } set { _userName = value; } }
-	
+	private String _socketServerUrl;
+	public String WebsocketServerUrl
+	{
+		get
+		{
+			if (null == _socketServerUrl)
+				_socketServerUrl = String.Format("ws://{0}.myfreecams.com:8080/fcsl", WebsocketServerName);
+			return _socketServerUrl;
+		}
+	}
+	private String _modelUrlFormat;
+	public String ModelUrlFormat
+	{
+		get
+		{
+			if (null == _modelUrlFormat)
+				_modelUrlFormat = "http://www.myfreecams.com/mfc2/php/mobj.php?f={0}&s=" + WebsocketServerName;
+			return _modelUrlFormat;
+		}
+	}
 
 	public void SendMessage(MFCMessage msg)
 	{
@@ -130,11 +141,10 @@ public class MFCClient
 		var info = Models.Where(m => m.nm == modelName).FirstOrDefault();
 		if (null == info)
 			throw new Exception("Model doesn't appear to be online.");
-		//don't know why but the broadcaster id is always
-		//prefixed with a 10
+		//public channels for models are always their userid + 100000000
+		//there are also session ids, but not sure what they are used for
+		//session id is userid + 200000000
 		var publicChannelId = 100000000 + info.uid;
-		publicChannelId.Dump();
-		info.sid.Dump();
 		//Queue a join message
 		SendMessage(new MFCMessage()
 		{
@@ -142,7 +152,7 @@ public class MFCClient
 			From = SessionID,
 			To = 0,
 			Arg1 = publicChannelId,                          
-			Arg2 = 9 //join channel + history	
+			Arg2 = (int)MFCChatOpt.FCCHAN_JOIN + (int)MFCChatOpt.FCCHAN_HISTORY
 		});	
 		
 		//Set up a filtered handler that only sends chat room messages
@@ -171,13 +181,14 @@ public class MFCClient
 		};
 	}
 	
-	//private methods
+	//events
 	protected virtual void OnReceived(MFCMessageEventArgs e)
 	{
 		if (null != Received)
 			Received(this, e);
 	}
 	
+	//private methods
 	void onSocketOpened(object sender, EventArgs e)
 	{
 		var socket = (WebSocket)sender;
@@ -193,14 +204,20 @@ public class MFCClient
 	
 	void onSocketMessage(object sender, MessageReceivedEventArgs e)
 	{
-		var msg = e.Message;
+		//occasionally get messages with random newlines--strip them
+		var msg = e.Message.Replace("\r\n","");
+		
 		try
 		{
-			
 			while (msg.Length > 0)
 			{
 				var dataLen = Int32.Parse(msg.Substring(0,4));
 				var data = msg.Substring(4, dataLen);
+				
+				//check for malformed packets
+				if (dataLen != data.Length)
+					break;
+					
 				OnReceived(new MFCMessageEventArgs(){Message = new MFCMessage(data)});
 	
 				msg = msg.Substring(dataLen + 4);
@@ -255,7 +272,7 @@ public class MFCClient
 					//figure out the file pointer
 					var fileno = JsonConvert.DeserializeObject<MetricsPayload>(WebUtility.UrlDecode(msg.Data)).fileno;
 					//get the file
-					var modelInfo = _client.DownloadString(String.Format(modelsUrlFormat, fileno));
+					var modelInfo = _client.DownloadString(String.Format(ModelUrlFormat, fileno));
 					//strip out extraneous javascript
 					modelInfo = modelInfo.Replace("var g_hModelData = ","");
 					modelInfo = modelInfo.Replace("LoadModelsFromObject(g_hModelData);","");
@@ -278,6 +295,32 @@ public class MFCClient
 			}
 			break;
 			
+		}
+	}
+	
+	class Server
+	{
+		public String Name { get; set; }
+		public String Type { get; set; }
+	}
+	Server[] ServerList = new []
+	{
+		new Server() { Name = "xchat11", Type = "hybi00" },
+		new Server() { Name = "xchat12", Type = "hybi00" },
+		new Server() { Name = "xchat20", Type = "hybi00" },
+		new Server() { Name = "xchat7", Type = "rfc6455" },
+		new Server() { Name = "xchat8", Type = "rfc6455" },
+		new Server() { Name = "xchat9", Type = "rfc6455" },
+		new Server() { Name = "xchat10", Type = "rfc6455" }
+	};
+	private String _socketServer;
+	public String WebsocketServerName
+	{
+		get
+		{
+			if (null == _socketServer)
+				_socketServer = ServerList[new Random().Next(ServerList.Length)].Name;
+			return _socketServer;
 		}
 	}
 }
@@ -319,11 +362,6 @@ public class MFCMessage
 	}
 	public MFCMessage(String msg)
 	{
-		//The first four characters of messages from the socket
-		//server indicate the message length
-		//var len = msg.Substring(0,4);
-		//msg = msg.Substring(4); //remove the len
-		
 		//split the string into msg and data
 		var pos5 = IndexOfNth(msg,' ',5);
 		String m1;
@@ -353,12 +391,12 @@ public class MFCMessage
 	//Messages are sent to the server in a particular format; this is a helper method
 	//for generating the correct format.  MFC's server supports sending more than one
 	//message at a time, but for now we send one at a time
-	public String AsMFCRequest()
+	public String AsMFCRequest() //for ajax connections
 	{
 		var format = "pk0={0}%20{1}%20{2}%20{3}%20{4}%20{5}";
 		return String.Format(format, (int)MessageType, From, To, Arg1, Arg2, (null == Data) ? "-" : Data);
 	}	
-	public String AsSocketMsg()
+	public String AsSocketMsg() //for websocket connections
 	{
 		var msg = String.Format("{0} {1} {2} {3} {4}", (int)MessageType, From, To, Arg1, Arg2);
 		if ("" != Data)
@@ -409,19 +447,19 @@ public class GuestLoginMessage : MFCMessage
 		Data="guest:guest";
 	}
 }
-public class JoinModelRoom : MFCMessage
-{
-	public JoinModelRoom(String modelName, int session)
-	{
-		MessageType = MFCMessageType.FCTYPE_JOINCHAN;
-		From = session;
-		To = 0;
-		//Arg1 = ""; //"10" + modelid 
-		Arg2 = 9;
-	}
-}
 
 //Enumerations are lifted straight from the MFC client code
+public enum MFCChatOpt
+{
+	FCCHAN_NOOPT = 0,
+	FCCHAN_JOIN = 1,
+	FCCHAN_PART = 2,
+	FCCHAN_BATCHPART = 64,
+	FCCHAN_OLDMSG = 4,
+	FCCHAN_HISTORY = 8,
+	FCCHAN_CAMSTATE = 16,
+	FCCHAN_WELCOME = 32
+}
 public enum MFCResponseType
 {
 	FCRESPONSE_SUCCESS = 0,
