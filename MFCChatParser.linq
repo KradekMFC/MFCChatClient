@@ -18,22 +18,70 @@ void Main()
 //	//testing multiple rooms
 //	mfc.JoinModelChatRoom("Roxie18", (m)=>{ m.Dump(); });
 //	//mfc.JoinModelChatRoom("AwesomeKate", (m)=>{if (m.IsTip) m.Dump();});
-	mfc.JoinModelChatRoom("Brina_", (m)=>{if (m.IsTip) m.Dump();});
-	mfc.JoinModelChatRoom("RachelSinger", (m)=>{if (m.IsTip) m.Dump();});
-	mfc.JoinModelChatRoom("JALYN", (m)=>{if (m.IsTip) m.Dump();});
-	mfc.JoinModelChatRoom("Bry_Anna", (m)=>{if (m.IsTip) m.Dump();});
+//	mfc.Received += (s,e) => {
+//		if (e.Message.MessageType != MFCMessageType.FCTYPE_SESSIONSTATE &&
+//			e.Message.MessageType != MFCMessageType.FCTYPE_TAGS)
+//		{
+//			e.Message.Dump();
+//		}
+//	};
+	mfc.JoinModelChatRoom("AbbeyRhode", (m)=>{m.Dump();});
 
+
+//	while(null == mfc.Models) {}
+//	
+//	var models = new Dictionary<int, ModelInfo>();
+//	mfc.Received += (s,e) => 
+//	{
+//		if (MFCMessageType.FCTYPE_SESSIONSTATE == e.Message.MessageType)
+//		{
+//			if (e.Message.Arg1 == 127)
+//				e.Message.Dump();
+//			var info = JsonConvert.DeserializeObject<ModelInfo>(WebUtility.UrlDecode(e.Message.Data));
+//			var model = mfc.Models.Where(m=>m.uid == info.uid).SingleOrDefault();
+//			if (null == model)
+//			{
+//				info.Dump();
+//				//model.Dump();
+//			}
+
+//			//if (info.lv != 4)
+//			//	return;
+//			if (!models.ContainsKey(info.uid))
+//				models.Add(info.uid, info);
+//			Util.ClearResults();
+//			models.Dump();
+//		}
+//	};
+	
+//	var msgCount = new Dictionary<MFCMessageType, int>();
+//	mfc.Received += (s,e) => 
+//	{
+//		if (!msgCount.ContainsKey(e.Message.MessageType))
+//			msgCount.Add(e.Message.MessageType, 1);
+//		else
+//			msgCount[e.Message.MessageType]++;
+//		Util.ClearResults();
+//		msgCount.Dump();
+//	};
+
+}
+
+public class Model
+{
+	public int UserID { get; set; }
+	public String Name {get; set;}
 }
 
 public class MFCClient
 {
 	//private properties
 	WebClient _client = new WebClient();
-	WebSocket _socket = new WebSocket("ws://xchat8.myfreecams.com:8080/fcsl");
+	WebSocket _socket = new WebSocket("ws://xchat11.myfreecams.com:8080/fcsl");
 	
 	String _sessionId = "0";
 	//url format used for getting initial list of online models.  TODO: remove hardcoded xchat3
-	String modelsUrlFormat = "http://www.myfreecams.com/mfc2/php/mobj.php?f={0}&s=xchat8";
+	String modelsUrlFormat = "http://www.myfreecams.com/mfc2/php/mobj.php?f={0}&s=xchat11";
 
 	System.Timers.Timer _ping = new System.Timers.Timer(15000);
 	
@@ -84,14 +132,16 @@ public class MFCClient
 			throw new Exception("Model doesn't appear to be online.");
 		//don't know why but the broadcaster id is always
 		//prefixed with a 10
-		var broadcasterId = Int32.Parse(("10" + info.uid).ToString());
+		var publicChannelId = 100000000 + info.uid;
+		publicChannelId.Dump();
+		info.sid.Dump();
 		//Queue a join message
 		SendMessage(new MFCMessage()
 		{
 			MessageType = MFCMessageType.FCTYPE_JOINCHAN,
 			From = SessionID,
 			To = 0,
-			Arg1 = broadcasterId,                          
+			Arg1 = publicChannelId,                          
 			Arg2 = 9 //join channel + history	
 		});	
 		
@@ -99,7 +149,7 @@ public class MFCClient
 		Received += (sender, e) => 
 		{
 			//leave if this is not a message for our room
-			if (e.Message.MessageType != MFCMessageType.FCTYPE_CMESG || e.Message.To != broadcasterId)
+			if (e.Message.MessageType != MFCMessageType.FCTYPE_CMESG || e.Message.To != publicChannelId)
 				return;
 			
 			//leave if there is no message data
@@ -203,7 +253,6 @@ public class MFCClient
 				if (msg.To == 20 && msg.Arg1 == 0 && msg.Arg2 > 0)
 				{
 					//figure out the file pointer
-					msg.Dump();
 					var fileno = JsonConvert.DeserializeObject<MetricsPayload>(WebUtility.UrlDecode(msg.Data)).fileno;
 					//get the file
 					var modelInfo = _client.DownloadString(String.Format(modelsUrlFormat, fileno));
@@ -446,6 +495,7 @@ public enum MFCMessageType
 	FCTYPE_PREVIEWCHAN = 57,
 	FCTYPE_SETWELCOME = 61,
 	FCTYPE_LISTCHAN = 63,
+	FCTYPE_TAGS = 64,
 	FCTYPE_UEOPT = 67,
 	FCTYPE_METRICS = 69,
 	FCTYPE_OFFERCAM = 70,
@@ -538,7 +588,7 @@ public sealed class MetricsPayload
 }
 public sealed class ModelInfo
 {
-	public int lv { get; set; }
+	public int? lv { get; set; }
 	public string nm { get; set; }
 	public int sid { get; set; }
 	public int uid { get; set; }
@@ -548,31 +598,31 @@ public sealed class ModelInfo
 }
 public sealed class U
 {
-	public int age { get; set; }
-	public int avatar { get; set; }
+	public int? age { get; set; }
+	public int? avatar { get; set; }
 	public string blurb { get; set; }
-	public int camserv { get; set; }
-	public int chat_bg { get; set; }
+	public int? camserv { get; set; }
+	public int? chat_bg { get; set; }
 	public string chat_color { get; set; }
-	public int chat_opt { get; set; }
+	public int? chat_opt { get; set; }
 	public string city { get; set; }
 	public string country { get; set; }
-	public int creation { get; set; }
+	public int? creation { get; set; }
 	public string ethnic { get; set; }
-	public int photos { get; set; }
-	public int profile { get; set; }
+	public int? photos { get; set; }
+	public int? profile { get; set; }
 }
 public sealed class M
 {
-	public double camscore { get; set; }
+	public double? camscore { get; set; }
 	public string continent { get; set; }
-	public int flags { get; set; }
-	public int kbit { get; set; }
-	public int lastnews { get; set; }
-	public int mg { get; set; }
-	public int missmfc { get; set; }
-	public int new_model { get; set; }
-	public int rank { get; set; }
+	public int? flags { get; set; }
+	public int? kbit { get; set; }
+	public int? lastnews { get; set; }
+	public int? mg { get; set; }
+	public int? missmfc { get; set; }
+	public int? new_model { get; set; }
+	public int? rank { get; set; }
 	public string topic { get; set; }
 }
 
