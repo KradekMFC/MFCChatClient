@@ -16,36 +16,20 @@ void Main()
 {
 	var mfc = new MFCClient();
 	//Example room joins
-//	mfc.JoinModelChatRoom("Roxie18", (m)=>{ m.Dump(); });
-//	mfc.JoinModelChatRoom("AshaSnow", (m)=>{ if (m.IsTip) m.Dump();});
+	mfc.JoinRoomByModelName("PerkyCandy", (m)=>{ m.Dump(); });
 
-	//Working out SESSIONSTATE
-	var models = new Dictionary<int, UserInfo>();
-	mfc.Received += (s,e) => 
-	{
-		
-			Util.ClearResults();
-			var summary = 
-			from m in mfc.Models
-			group m by m.vs into g
-			select new {SessionType = g.Key, Count = g.Count()};
-			
-			var idle = mfc.Models.Where(x=>x.vs == 90).Count();
-			summary.Dump();
-			(mfc.Models.Count() - idle).Dump();
-	};
 	
 	//Overview of message types received
-//	var msgCount = new Dictionary<MFCMessageType, int>();
-//	mfc.Received += (s,e) => 
-//	{
-//		if (!msgCount.ContainsKey(e.Message.MessageType))
-//			msgCount.Add(e.Message.MessageType, 1);
-//		else
-//			msgCount[e.Message.MessageType]++;
-//		Util.ClearResults();
-//		msgCount.Dump();
-//	};
+	var msgCount = new Dictionary<MFCMessageType, int>();
+	mfc.Received += (s,e) => 
+	{
+		if (!msgCount.ContainsKey(e.Message.MessageType))
+			msgCount.Add(e.Message.MessageType, 1);
+		else
+			msgCount[e.Message.MessageType]++;
+		Util.ClearResults();
+		msgCount.Dump();
+	};
 
 }
 
@@ -123,36 +107,64 @@ public class MFCClient
 		}
 	}
 
+	Queue sendQueue = new Queue();
 	public void SendMessage(MFCMessage msg)
 	{	
-		if (WebSocketState.Open != _socket.State)
-			throw new Exception("Websocket is not open.");
-			
-		_socket.Send(msg.AsSocketMsg());
+		sendQueue.Enqueue(msg);
+		if (WebSocketState.Open == _socket.State)
+		{
+			while (sendQueue.Count > 0)
+			{
+				var m = sendQueue.Dequeue();
+				_socket.Send(((MFCMessage)m).AsSocketMsg());
+			}
+		}
 	}
 	//JoinModelChatRoom takes a modelname and a handler for receiving messages
-	public void JoinModelChatRoom(String modelName, ChatMessageHandler onMsg)
+	public void JoinRoomByModelName(String modelName, ChatMessageHandler onMsg)
 	{
-		//wait until we actually have a model list
-		while(null == Models){} //TODO: change this so we don't get into an infinite loop
 		//figure out what the broadcasterid is for the model
 		var info = Models.Where(m => m.nm == modelName).FirstOrDefault();
 		if (null == info)
-			throw new Exception("Model doesn't appear to be online.");
+		{
+			//Ask the server what the userid is
+			SendMessage(new UserLookupMessage(modelName));
+			//Handle when it returns
+			MFCMessageEventHandler lookupHandler = null;
+			lookupHandler = (s,e) => 
+			{
+				if (e.Message.MessageType == MFCMessageType.FCTYPE_USERNAMELOOKUP)
+				{
+					var userInfo = JsonConvert.DeserializeObject<UserInfo>(WebUtility.UrlDecode(e.Message.Data));
+					if (userInfo.nm == modelName)
+					{
+						Received -= lookupHandler;
+						JoinRoomByUserId(e.Message.Arg2, onMsg);
+					}
+				}
+			};
+			Received += lookupHandler;
+		}
+		else
+			JoinRoomByUserId((int)info.uid, onMsg);
+
+	}
+	
+	public void JoinRoomByUserId(int userId, ChatMessageHandler onMsg)
+	{
 		//public channels for models are always their userid + 100000000
 		//there are also session ids, but not sure what they are used for
 		//session id is userid + 200000000
-		var publicChannelId = 100000000 + info.uid;
+		var publicChannelId = 100000000 + userId;
 		//Queue a join message
 		SendMessage(new MFCMessage()
 		{
 			MessageType = MFCMessageType.FCTYPE_JOINCHAN,
 			From = SessionID,
 			To = 0,
-			Arg1 = (int)publicChannelId,                          
+			Arg1 = publicChannelId,                          
 			Arg2 = (int)MFCChatOpt.FCCHAN_JOIN + (int)MFCChatOpt.FCCHAN_HISTORY
 		});	
-		
 		//Set up a filtered handler that only sends chat room messages
 		Received += (sender, e) => 
 		{
@@ -176,7 +188,7 @@ public class MFCClient
 				e.Message.Dump();
 			}
 				
-		};
+		};		
 	}
 	
 	//events
@@ -526,6 +538,19 @@ public class GuestLoginMessage : MFCMessage
 		Arg1 = 20071025;
 		Arg2 = 0;
 		Data="guest:guest";
+	}
+}
+
+public class UserLookupMessage : MFCMessage
+{
+	public UserLookupMessage(string userName)
+	{
+		MessageType = MFCMessageType.FCTYPE_USERNAMELOOKUP;
+		From = 0;
+		To = 0;
+		Arg1 = 20;
+		Arg2 = 0;
+		Data = userName;	
 	}
 }
 
