@@ -12,42 +12,28 @@
   <Namespace>WebSocket4Net</Namespace>
 </Query>
 
-//TODO
-// handle sessionstate messages
-
 void Main()
 {
 	var mfc = new MFCClient();
 	//Example room joins
 //	mfc.JoinModelChatRoom("Roxie18", (m)=>{ m.Dump(); });
-	mfc.JoinModelChatRoom("ParisLovely", (m)=>{ if (m.IsTip) m.Dump();});
+//	mfc.JoinModelChatRoom("AshaSnow", (m)=>{ if (m.IsTip) m.Dump();});
 
 	//Working out SESSIONSTATE
-//	while(null == mfc.Models) {}
-	
-//	var models = new Dictionary<int, ModelInfo>();
-//	mfc.Received += (s,e) => 
-//	{
-//		if (MFCMessageType.FCTYPE_SESSIONSTATE == e.Message.MessageType)
-//		{
-//			if (e.Message.Arg1 == 127)
-//				e.Message.Dump();
-//			var info = JsonConvert.DeserializeObject<ModelInfo>(WebUtility.UrlDecode(e.Message.Data));
-//			var model = mfc.Models.Where(m=>m.uid == info.uid).SingleOrDefault();
-//			if (null == model)
-//			{
-//				info.Dump();
-//				//model.Dump();
-//			}
-
-//			//if (info.lv != 4)
-//			//	return;
-//			if (!models.ContainsKey(info.uid))
-//				models.Add(info.uid, info);
-//			Util.ClearResults();
-//			models.Dump();
-//		}
-//	};
+	var models = new Dictionary<int, UserInfo>();
+	mfc.Received += (s,e) => 
+	{
+		
+			Util.ClearResults();
+			var summary = 
+			from m in mfc.Models
+			group m by m.vs into g
+			select new {SessionType = g.Key, Count = g.Count()};
+			
+			var idle = mfc.Models.Where(x=>x.vs == 90).Count();
+			summary.Dump();
+			(mfc.Models.Count() - idle).Dump();
+	};
 	
 	//Overview of message types received
 //	var msgCount = new Dictionary<MFCMessageType, int>();
@@ -82,6 +68,7 @@ public class MFCClient
 		_socket.Opened += onSocketOpened;
 		_socket.Error += onSocketError;
 		_socket.MessageReceived += onSocketMessage;
+		_socket.Closed += onSocketClosed;
 		
 		//set up a ping so the server doesn't close our connection
 		//MFC does it randomly between 10 and 20s--not sure why--
@@ -97,8 +84,16 @@ public class MFCClient
 	//public properties
 	public event MFCMessageEventHandler Received; //tap into the message feed
 	public int SessionID { get {return Int32.Parse(_sessionId);}} //chat server session identifier
-	public IEnumerable<ModelInfo> Models { get; set; } //initial list of online models.  Need to figure out how to update
-	                                                   //it (likely FCTYPE_SESSIONSTATE messages)
+	public IEnumerable<UserInfo> Models 
+	{ 
+		get
+		{
+			return _users.Where(u => u.Value.lv == 4).Select(m => m.Value);
+		}
+	}
+	             
+	private Dictionary<int, UserInfo> _users = new Dictionary<int, UserInfo>();													   
+	public IDictionary<int, UserInfo> Users {get {return _users;}}													   
 	private Boolean _connected = false;
 	public Boolean Connected { get { return _connected;} }
 	private Boolean _loggedIn = false;
@@ -129,7 +124,10 @@ public class MFCClient
 	}
 
 	public void SendMessage(MFCMessage msg)
-	{
+	{	
+		if (WebSocketState.Open != _socket.State)
+			throw new Exception("Websocket is not open.");
+			
 		_socket.Send(msg.AsSocketMsg());
 	}
 	//JoinModelChatRoom takes a modelname and a handler for receiving messages
@@ -151,7 +149,7 @@ public class MFCClient
 			MessageType = MFCMessageType.FCTYPE_JOINCHAN,
 			From = SessionID,
 			To = 0,
-			Arg1 = publicChannelId,                          
+			Arg1 = (int)publicChannelId,                          
 			Arg2 = (int)MFCChatOpt.FCCHAN_JOIN + (int)MFCChatOpt.FCCHAN_HISTORY
 		});	
 		
@@ -189,6 +187,73 @@ public class MFCClient
 	}
 	
 	//private methods
+	void updateUserInfo(int userId, UserInfo info)
+	{
+		//if we don't have the user already, add them and leave
+		if (!_users.ContainsKey(userId))
+		{
+			_users.Add(userId, info);
+			return;
+		}
+		//update the user
+		var current = _users[userId];
+		current.lv = info.lv != null ? info.lv : current.lv;
+		current.nm = info.nm != null ? info.nm : current.nm;
+		current.sid = info.sid != null ? info.sid : current.sid;
+		current.vs = info.vs != null ? info.vs : current.vs;
+		if (null != info.u)
+		{
+			if (null != current.u)
+			{
+				current.u.age = info.u.age != null ? info.u.age : current.u.age;
+				current.u.avatar = info.u.avatar != null ? info.u.avatar : current.u.avatar;
+				current.u.blurb = info.u.blurb != null ? info.u.blurb : current.u.blurb;
+				current.u.camserv = info.u.camserv != null ? info.u.camserv : current.u.camserv;
+				current.u.chat_bg = info.u.chat_bg != null ? info.u.chat_bg : current.u.chat_bg;
+				current.u.chat_color = info.u.chat_color != null ? info.u.chat_color : current.u.chat_color;
+				current.u.chat_opt = info.u.chat_opt != null ? info.u.chat_opt : current.u.chat_opt;
+				current.u.city = info.u.city != null ? info.u.city : current.u.city;
+				current.u.country = info.u.country != null ? info.u.country : current.u.country;
+				current.u.creation = info.u.creation != null ? info.u.creation : current.u.creation;
+				current.u.ethnic = info.u.ethnic != null ? info.u.ethnic : current.u.ethnic;
+				current.u.photos = info.u.photos != null ? info.u.photos : current.u.photos;
+				current.u.profile = info.u.profile != null ? info.u.profile : current.u.profile;
+			}
+			else
+				current.u = info.u;
+		}
+		if (null != info.m)
+		{
+			if (null != current.m)
+			{
+				current.m.camscore = info.m.camscore != null ? info.m.camscore : current.m.camscore;
+				current.m.continent = info.m.continent != null ? info.m.continent : current.m.continent;
+				current.m.flags = info.m.flags != null ? info.m.flags : current.m.flags;
+				current.m.kbit = info.m.kbit != null ? info.m.kbit : current.m.kbit;
+				current.m.lastnews = info.m.lastnews != null ? info.m.lastnews : current.m.lastnews;
+				current.m.mg = info.m.mg != null ? info.m.mg : current.m.mg;
+				current.m.missmfc = info.m.missmfc != null ? info.m.missmfc : current.m.missmfc;
+				current.m.new_model = info.m.new_model != null ? info.m.new_model : current.m.new_model;
+				current.m.rank = info.m.rank != null ? info.m.rank : current.m.rank;
+				current.m.topic = info.m.topic != null ? info.m.topic : current.m.topic;		
+			}
+			else
+				current.m = info.m;
+		}
+		
+		_users[userId] = current;
+	}
+	
+	void onSessionState(MFCMessage msg)
+	{
+		//remove users that are offline
+		if (msg.Arg1 == (int)MFCVideoState.FCVIDEO_UNKNOWN)
+			_users.Remove(msg.Arg2);
+		//convert the json
+		var info = JsonConvert.DeserializeObject<UserInfo>(WebUtility.UrlDecode(msg.Data));
+		//update the user
+		updateUserInfo(msg.Arg2, info);
+	}
 	void onSocketOpened(object sender, EventArgs e)
 	{
 		var socket = (WebSocket)sender;
@@ -199,7 +264,10 @@ public class MFCClient
 	
 	void onSocketError(object sender, SuperSocket.ClientEngine.ErrorEventArgs e)
 	{
-		e.Exception.Message.Dump();
+		//TODO need to handle this better
+		_ping.Enabled = false;
+		throw e.Exception;
+		//e.Exception.Message.Dump();
 	}
 	
 	void onSocketMessage(object sender, MessageReceivedEventArgs e)
@@ -234,12 +302,24 @@ public class MFCClient
 		SendMessage(new NullMessage());
 	}
 	
+	void onSocketClosed(object sender, EventArgs e)
+	{
+		//TODO need to think about what we should really do here
+		_ping.Enabled = false;
+		throw new Exception("Websocket closed unexpectedly.");
+	}
+	
 	void internalHandler(object sender, MFCMessageEventArgs e)
 	{
 		var msg = e.Message;
 		
 		switch (msg.MessageType)
 		{
+			case MFCMessageType.FCTYPE_SESSIONSTATE:
+			{
+				onSessionState(msg);
+			}
+			break;
 			case MFCMessageType.FCTYPE_LOGIN:
 			{
 				//when we get a login message, if it's a success message, save the session id
@@ -283,8 +363,9 @@ public class MFCClient
 						var m = JObject.Parse(modelInfo); //parse to a dynamic
 						var n = m.Properties().Where(p=>!p.Name.StartsWith("tags")) //filter out the tags objects
 						         .Children() //give us back JTokens
-								 .Select(x => JsonConvert.DeserializeObject<ModelInfo>(x.ToString())); //serialize the individual model objects
-						Models = n;
+								 .Select(x => JsonConvert.DeserializeObject<UserInfo>(x.ToString())); //serialize the individual model objects
+						foreach(var model in n)
+							updateUserInfo(model.uid ?? default(int), model);
 					}
 					catch(Exception oops)
 					{
@@ -624,13 +705,13 @@ public sealed class MetricsPayload
 {
 	public String fileno { get; set; }
 }
-public sealed class ModelInfo
+public sealed class UserInfo
 {
 	public int? lv { get; set; }
 	public string nm { get; set; }
-	public int sid { get; set; }
-	public int uid { get; set; }
-	public int vs { get; set; }
+	public int? sid { get; set; }
+	public int? uid { get; set; }
+	public int? vs { get; set; }
 	public U u { get; set; }
 	public M m { get; set; }
 }
