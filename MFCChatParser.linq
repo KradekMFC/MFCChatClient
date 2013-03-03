@@ -14,23 +14,34 @@
 
 void Main()
 {
-	var mfc = new MFCModelRoom("AmberCutie");
-	mfc.Tip += (s,e) => 
+
+	IList<Tip> AllTips = new List<Tip>();
+	EventHandler<MFCTipEventArgs> handler = (s,e) => 
 	{
 		Util.ClearResults();
-		(from tip in mfc.Tips
-		 group tip by tip.Tipper into g
-		 select new 
-		 {
-		 	Tipper=g.Key, 
-			Count=g.Count(), 
-			Total=g.Sum(x=>x.Amount)
-		 }).Dump();
+		AllTips.Add(e.Tip);
+		AllTips.Dump();
+//		(from tip in ((MFCModelRoom)s).Tips
+//		 group tip by tip.Tipper into g
+//		 select new 
+//		 {
+//		 	Tipper=g.Key, 
+//			Count=g.Count(), 
+//			Total=g.Sum(x=>x.Amount)
+//		 }).Dump();
 	};
 	
-	//Example room joins
-	//mfc.JoinRoomByModelName("KayleePond", (m)=>{ m.Message.Dump(); });
+	var mfc = new MFCModelRoom("AspenRae");
+	var mfc2 = new MFCModelRoom("MJ_Madness");
+	var mfc3 = new MFCModelRoom("CandieCane");
+	var mfc4 = new MFCModelRoom("XNicoleXO");
+	
+	mfc.Tip += handler;
+	mfc2.Tip += handler;
+	mfc3.Tip += handler;
+	mfc4.Tip += handler;
 
+	
 	//Overview of message types received
 //	var msgCount = new Dictionary<MFCMessageType, int>();
 //	mfc.Received += (s,e) => 
@@ -113,28 +124,36 @@ public class MFCChatRoom
 	{
 		//figure out what the broadcasterid is for the model
 		var info = _client.Users.Select(u=>u.Value).Where(n => n.nm == _userName).FirstOrDefault();
-		if (null == info)
+		if (null != info)
 		{
-			//Ask the server what the userid is
-			_client.SendMessage(new UserLookupMessage(_userName));
-			//Handle when it returns
-			EventHandler<MFCMessageEventArgs> lookupHandler = null;
-			lookupHandler = (s,e) => 
-			{
-				if (e.Message.MessageType == MFCMessageType.FCTYPE_USERNAMELOOKUP)
-				{
-					var userInfo = JsonConvert.DeserializeObject<UserInfo>(WebUtility.UrlDecode(e.Message.Data));
-					if (userInfo.nm == _userName)
-					{
-						_client.Received -= lookupHandler;
-						JoinByUserId(e.Message.Arg2);
-					}
-				}
-			};
-			_client.Received += lookupHandler;
-		}
-		else
 			JoinByUserId((int)info.uid);
+			return;
+		}
+
+		//Ask the server what the userid is
+		_client.SendMessage(new UserLookupMessage(_userName));
+		
+		//Handle lookup response
+		EventHandler<MFCMessageEventArgs> lookupHandler = null;
+		lookupHandler = (s,e) => 
+		{
+			if (e.Message.MessageType == MFCMessageType.FCTYPE_USERNAMELOOKUP)
+			{
+				//remove the handler
+				_client.Received -= lookupHandler;
+				
+				//was the user found?
+				if (e.Message.Arg2 == (int)MFCResponseType.FCRESPONSE_ERROR)
+					throw new Exception("Could not find a user by the name, " + e.Message.Data);
+					
+				//join by id	
+				var userInfo = JsonConvert.DeserializeObject<UserInfo>(WebUtility.UrlDecode(e.Message.Data));
+				if (userInfo.nm == _userName)
+					JoinByUserId(e.Message.Arg2);
+			}
+		};
+		_client.Received += lookupHandler;
+			
 
 	}	
 	
@@ -343,33 +362,36 @@ public class MFCClient
 		//e.Exception.Message.Dump();
 	}
 	
+	String queued = "";
 	void onSocketMessage(object sender, MessageReceivedEventArgs e)
 	{
 		//occasionally get messages with random newlines--strip them
-		var msg = e.Message.Replace("\r\n","");
+		queued += e.Message.Replace("\r\n","");
 		
-		try
+		while (queued.Length > 12)
 		{
-			while (msg.Length > 12)
-			{
-				var dataLen = Int32.Parse(msg.Substring(0,4));
-				var data = msg.Substring(4, dataLen);
+			//how long is the next message?
+			var dataLen = Int32.Parse(queued.Substring(0,4));
+			
+			//do we have that much data?
+			if (queued.Length < dataLen + 4)
+				return; //wait for more data
 				
-				//check for malformed packets
-				if (dataLen != data.Length)
-					break;
-					
-				OnReceived(new MFCMessageEventArgs(){ Message = new MFCMessage(data) });
-	
-				msg = msg.Substring(dataLen + 4);
+			//get the data
+			var data = queued.Substring(4, dataLen);
+			
+			//check for malformed packets
+			if (dataLen != data.Length)
+				break;
+				
+			//handle the message	
+			OnReceived(new MFCMessageEventArgs(){ Message = new MFCMessage(data) });
 
-			}
+			//get the next message
+			queued = queued.Substring(dataLen + 4);
 		}
-		catch (Exception err)
-		{
-			err.Dump();
-			e.Message.Dump();
-		}
+		//reset the queue
+		queued = "";
 	}
 	
 	void onPing(object sender, EventArgs e)
