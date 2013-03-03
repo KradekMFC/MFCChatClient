@@ -14,23 +14,157 @@
 
 void Main()
 {
-	var mfc = new MFCClient();
-	//Example room joins
-	mfc.JoinRoomByModelName("PerkyCandy", (m)=>{ m.Dump(); });
-
-	
-	//Overview of message types received
-	var msgCount = new Dictionary<MFCMessageType, int>();
-	mfc.Received += (s,e) => 
+	var mfc = new MFCModelRoom("AmberCutie");
+	mfc.Tip += (s,e) => 
 	{
-		if (!msgCount.ContainsKey(e.Message.MessageType))
-			msgCount.Add(e.Message.MessageType, 1);
-		else
-			msgCount[e.Message.MessageType]++;
 		Util.ClearResults();
-		msgCount.Dump();
+		(from tip in mfc.Tips
+		 group tip by tip.Tipper into g
+		 select new 
+		 {
+		 	Tipper=g.Key, 
+			Count=g.Count(), 
+			Total=g.Sum(x=>x.Amount)
+		 }).Dump();
 	};
+	
+	//Example room joins
+	//mfc.JoinRoomByModelName("KayleePond", (m)=>{ m.Message.Dump(); });
 
+	//Overview of message types received
+//	var msgCount = new Dictionary<MFCMessageType, int>();
+//	mfc.Received += (s,e) => 
+//	{
+//		if (!msgCount.ContainsKey(e.Message.MessageType))
+//			msgCount.Add(e.Message.MessageType, 1);
+//		else
+//			msgCount[e.Message.MessageType]++;
+//		Util.ClearResults();
+//		msgCount.Dump();
+//	};
+
+}
+
+public class MFCModelRoom : MFCChatRoom
+{
+	public MFCModelRoom(String modelName)
+		:base(modelName)
+	{
+		ChatMessageReceived += HandleTip;
+	}
+	
+	public IList<Tip> Tips = new List<Tip>();
+	
+	public event EventHandler<MFCTipEventArgs> Tip; 
+	protected virtual void OnTip(MFCTipEventArgs e)
+	{
+		if (null != Tip)
+			Tip(this, e);
+	}
+	
+	void HandleTip(object sender, MFCChatMessageEventArgs e)
+	{
+		if (null != e.ChatMessage && !e.ChatMessage.IsTip)
+			return;
+		
+		var tipMsg = e.ChatMessage.ChatMessageData.Message;
+		if (null != tipMsg && "" != tipMsg)
+		{
+			var match = Regex.Match(tipMsg, @"(\w*) has tipped (\w*) (\d*) tokens");
+			var tip = new Tip(){Tipper=match.Groups[1].Value, Model=match.Groups[2].Value,Amount=Int32.Parse(match.Groups[3].Value)};
+			Tips.Add(tip);
+			OnTip(new MFCTipEventArgs() {Tip = tip});
+		}
+	}
+}
+
+public class Tip
+{
+	public String Tipper { get; set; }
+	public String Model { get; set; }
+	public int Amount { get; set; }
+}
+
+public class MFCTipEventArgs : EventArgs
+{
+	public Tip Tip { get; set; }
+}
+
+public class MFCChatRoom
+{
+	MFCClient _client = new MFCClient();
+	String _userName = "";
+	
+	public MFCChatRoom(String userName)
+	{
+		_userName = userName;	
+		JoinByName();
+	}
+	
+	public event EventHandler<MFCChatMessageEventArgs> ChatMessageReceived; 
+	protected virtual void OnChatMessageReceived(MFCChatMessageEventArgs e)
+	{
+		if (null != ChatMessageReceived)
+			ChatMessageReceived(this, e);
+	}	
+	
+	//JoinModelChatRoom takes a modelname and a handler for receiving messages
+	void JoinByName()
+	{
+		//figure out what the broadcasterid is for the model
+		var info = _client.Users.Select(u=>u.Value).Where(n => n.nm == _userName).FirstOrDefault();
+		if (null == info)
+		{
+			//Ask the server what the userid is
+			_client.SendMessage(new UserLookupMessage(_userName));
+			//Handle when it returns
+			EventHandler<MFCMessageEventArgs> lookupHandler = null;
+			lookupHandler = (s,e) => 
+			{
+				if (e.Message.MessageType == MFCMessageType.FCTYPE_USERNAMELOOKUP)
+				{
+					var userInfo = JsonConvert.DeserializeObject<UserInfo>(WebUtility.UrlDecode(e.Message.Data));
+					if (userInfo.nm == _userName)
+					{
+						_client.Received -= lookupHandler;
+						JoinByUserId(e.Message.Arg2);
+					}
+				}
+			};
+			_client.Received += lookupHandler;
+		}
+		else
+			JoinByUserId((int)info.uid);
+
+	}	
+	
+	void JoinByUserId(int userId)
+	{
+		//public channels for models are always their userid + 100000000
+		//there are also session ids, but not sure what they are used for
+		//session id is userid + 200000000
+		var publicChannelId = 100000000 + userId;
+		
+		//Queue a join message
+		_client.SendMessage(new MFCMessage()
+		{
+			MessageType = MFCMessageType.FCTYPE_JOINCHAN,
+			From = _client.SessionID,
+			To = 0,
+			Arg1 = publicChannelId,                          
+			Arg2 = (int)(MFCChatOpt.FCCHAN_JOIN | MFCChatOpt.FCCHAN_HISTORY)
+		});	
+		
+		//Set up a filtered handler that only sends chat room messages
+		_client.Received += (sender, e) => 
+		{
+			//leave if this is not a message for our room
+			if (e.Message.MessageType != MFCMessageType.FCTYPE_CMESG || e.Message.To != publicChannelId)
+				return;
+				
+			OnChatMessageReceived(new MFCChatMessageEventArgs(){ ChatMessage = new MFCChatMessage(e.Message)});				
+		};		
+	}	
 }
 
 public class MFCClient
@@ -38,12 +172,9 @@ public class MFCClient
 	//private properties
 	WebClient _client = new WebClient();
 	WebSocket _socket;
-	
 	String _sessionId = "0";
-
 	System.Timers.Timer _ping = new System.Timers.Timer(15000);
 	
-	//constructor
 	public MFCClient()
 	{
 		_socket = new WebSocket(WebsocketServerUrl);
@@ -66,13 +197,12 @@ public class MFCClient
 	}
 	
 	//public properties
-	public event MFCMessageEventHandler Received; //tap into the message feed
 	public int SessionID { get {return Int32.Parse(_sessionId);}} //chat server session identifier
 	public IEnumerable<UserInfo> Models 
 	{ 
 		get
 		{
-			return _users.Where(u => u.Value.lv == 4).Select(m => m.Value);
+			return _users.Where(u => u.Value.lv == (int)MFCAccessLevel.Model).Select(m => m.Value);
 		}
 	}
 	             
@@ -120,78 +250,9 @@ public class MFCClient
 			}
 		}
 	}
-	//JoinModelChatRoom takes a modelname and a handler for receiving messages
-	public void JoinRoomByModelName(String modelName, ChatMessageHandler onMsg)
-	{
-		//figure out what the broadcasterid is for the model
-		var info = Models.Where(m => m.nm == modelName).FirstOrDefault();
-		if (null == info)
-		{
-			//Ask the server what the userid is
-			SendMessage(new UserLookupMessage(modelName));
-			//Handle when it returns
-			MFCMessageEventHandler lookupHandler = null;
-			lookupHandler = (s,e) => 
-			{
-				if (e.Message.MessageType == MFCMessageType.FCTYPE_USERNAMELOOKUP)
-				{
-					var userInfo = JsonConvert.DeserializeObject<UserInfo>(WebUtility.UrlDecode(e.Message.Data));
-					if (userInfo.nm == modelName)
-					{
-						Received -= lookupHandler;
-						JoinRoomByUserId(e.Message.Arg2, onMsg);
-					}
-				}
-			};
-			Received += lookupHandler;
-		}
-		else
-			JoinRoomByUserId((int)info.uid, onMsg);
-
-	}
-	
-	public void JoinRoomByUserId(int userId, ChatMessageHandler onMsg)
-	{
-		//public channels for models are always their userid + 100000000
-		//there are also session ids, but not sure what they are used for
-		//session id is userid + 200000000
-		var publicChannelId = 100000000 + userId;
-		//Queue a join message
-		SendMessage(new MFCMessage()
-		{
-			MessageType = MFCMessageType.FCTYPE_JOINCHAN,
-			From = SessionID,
-			To = 0,
-			Arg1 = publicChannelId,                          
-			Arg2 = (int)MFCChatOpt.FCCHAN_JOIN + (int)MFCChatOpt.FCCHAN_HISTORY
-		});	
-		//Set up a filtered handler that only sends chat room messages
-		Received += (sender, e) => 
-		{
-			//leave if this is not a message for our room
-			if (e.Message.MessageType != MFCMessageType.FCTYPE_CMESG || e.Message.To != publicChannelId)
-				return;
-			
-			//leave if there is no message data
-			if ("" == e.Message.Data || null == e.Message.Data)
-				return;
-
-			try
-			{
-				var decoded = WebUtility.UrlDecode(e.Message.Data);
-				var msg = JsonConvert.DeserializeObject<ChatMessage>(decoded); 
-				onMsg(msg);
-			}
-			catch (Exception err)
-			{
-				err.Dump();
-				e.Message.Dump();
-			}
-				
-		};		
-	}
 	
 	//events
+	public event EventHandler<MFCMessageEventArgs> Received; //tap into the message feed
 	protected virtual void OnReceived(MFCMessageEventArgs e)
 	{
 		if (null != Received)
@@ -289,7 +350,7 @@ public class MFCClient
 		
 		try
 		{
-			while (msg.Length > 0)
+			while (msg.Length > 12)
 			{
 				var dataLen = Int32.Parse(msg.Substring(0,4));
 				var data = msg.Substring(4, dataLen);
@@ -298,14 +359,16 @@ public class MFCClient
 				if (dataLen != data.Length)
 					break;
 					
-				OnReceived(new MFCMessageEventArgs(){Message = new MFCMessage(data)});
+				OnReceived(new MFCMessageEventArgs(){ Message = new MFCMessage(data) });
 	
 				msg = msg.Substring(dataLen + 4);
+
 			}
 		}
 		catch (Exception err)
 		{
-			msg.Dump();
+			err.Dump();
+			e.Message.Dump();
 		}
 	}
 	
@@ -420,22 +483,13 @@ public class MFCClient
 
 
 //Received event boilerplate
-public delegate void MFCMessageEventHandler (object sender, MFCMessageEventArgs e);
 public class MFCMessageEventArgs : EventArgs
 {
 	public MFCMessage Message { get; set; }
 }
-public delegate void ChatMessageHandler(ChatMessage m);
-
-//helper class for parsing MFC responses
-public class MFCChatResponse
+public class MFCChatMessageEventArgs : EventArgs
 {
-	public MFCChatResponse(String response)
-	{
-		Messages = response.Split('"').Select(m => new MFCMessage(m));
-	}
-	
-	public IEnumerable<MFCMessage> Messages {get; set;}
+	public MFCChatMessage ChatMessage {get; set;}
 }
 
 //helper class for parsing/sending messages tot he chat server
@@ -554,6 +608,54 @@ public class UserLookupMessage : MFCMessage
 	}
 }
 
+public class MFCChatMessage : MFCMessage
+{
+	public MFCChatMessage(String msg)
+		:base(msg)
+	{
+		parseData();
+	}
+	
+	public MFCChatMessage(MFCMessage msg)
+	{
+		From = msg.From;
+		To = msg.To;
+		Arg1 = msg.Arg1;
+		Arg2 = msg.Arg2;
+		Data = msg.Data;
+		parseData();
+	}
+	
+	public ChatMessageData ChatMessageData {get; set;}
+	
+	void parseData()
+	{
+		if (null != Data && "" != Data)
+		{
+			try
+			{
+				var decoded = WebUtility.UrlDecode(Data);
+				ChatMessageData = JsonConvert.DeserializeObject<ChatMessageData>(decoded);
+			}
+			catch (Exception err)
+			{
+				err.Dump();
+			}
+		}	
+	}
+	
+	public Boolean IsTip
+	{
+		get
+		{
+			if (null != ChatMessageData)
+				return ("FCServer" == ChatMessageData.Name && ChatMessageData.Message.Contains("has tipped"));
+			else
+				return false;
+		}
+	}
+}
+
 //Enumerations are lifted straight from the MFC client code
 public enum MFCChatOpt
 {
@@ -656,6 +758,23 @@ public enum MFCMessageType
 	FCTYPE_DISCONNECTED = 98,
 	FCTYPE_LOGOUT = 99
 }
+
+public enum MFCLounges
+{
+	Lounge = 486121,
+	Lounge1000 = 486123,
+	Lounge10000 = 486124
+}
+
+public enum MFCAccessLevel
+{
+	Guest = 0,
+	Basic = 1,
+	Premium = 2,
+	Model = 4,
+	Admin = 5
+}
+	
 //for future reference
 //public enum MFCFonts
 // 0: { name: 'Arial' },
@@ -718,14 +837,6 @@ public enum MFCMessageType
 
 
 //javascript deserialization classes
-public sealed class ChatRoomMsg
-{
-	public String lv { get; set; }
-	public String msg { get; set; }
-	public String nm { get; set; }
-	public String sid { get; set; }
-	public String uid { get; set; }
-}
 public sealed class MetricsPayload
 {
 	public String fileno { get; set; }
@@ -778,7 +889,7 @@ public class UserChatOptions
     public int ChatFont { get; set; }
 }
 
-public class ChatMessage
+public class ChatMessageData
 {
 	[JsonProperty(PropertyName = "lv")]
     public int AccessLevel { get; set; }
@@ -794,12 +905,4 @@ public class ChatMessage
     public MFCVideoState VideoState { get; set; } 
 	[JsonProperty(PropertyName = "u")]
     public UserChatOptions ChatOptions { get; set; }
-	[JsonIgnore]
-	public Boolean IsTip
-	{
-		get
-		{
-			return ("FCServer" == Name && Message.Contains("has tipped"));
-		}
-	}
 }
