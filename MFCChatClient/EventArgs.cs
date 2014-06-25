@@ -20,4 +20,9 @@ namespace MFCChatClient
     {
         public Tip Tip { get; set; }
     }
+
+    public class SocketErrorEventArgs : EventArgs
+    {
+        public Exception Exception { get; set; }
+    }
 }

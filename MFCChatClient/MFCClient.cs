@@ -21,6 +21,19 @@ namespace MFCChatClient
 
         public MFCClient()
         {
+            initialize();
+        }
+
+        public MFCClient(Boolean enableHeartBeat)
+        {
+            initialize();
+
+            if (enableHeartBeat)
+                ToggleHeartBeat();
+        }
+
+        void initialize()
+        {
             _socket = new WebSocket(WebsocketServerUrl);
 
             //setup up the socket
@@ -28,12 +41,6 @@ namespace MFCChatClient
             _socket.Error += onSocketError;
             _socket.MessageReceived += onSocketMessage;
             _socket.Closed += onSocketClosed;
-
-            //set up a ping so the server doesn't close our connection
-            //MFC does it randomly between 10 and 20s--not sure why--
-            //here we're just doing it every 15s
-            _ping.Elapsed += onPing;
-            _ping.Enabled = true;
 
             _socket.Open();
 
@@ -50,6 +57,8 @@ namespace MFCChatClient
             }
         }
 
+        private Boolean _handleSessionState = false;
+        public Boolean HandleSessionState { get { return _handleSessionState; } set { _handleSessionState = value; } }
         private Dictionary<int, User> _users = new Dictionary<int, User>();
         public IDictionary<int, User> Users { get { return _users; } }
         private Boolean _connected = false;
@@ -95,12 +104,52 @@ namespace MFCChatClient
             }
         }
 
+        //public methods
+        private Boolean _heartBeatEnabled = false;
+        public void ToggleHeartBeat()
+        {
+            if (_heartBeatEnabled)
+            {
+                _ping.Enabled = false;
+                _ping.Elapsed -= onPing;
+                _heartBeatEnabled = false;
+            }
+            else
+            {
+                //set up a ping so the server doesn't close our connection
+                //MFC does it randomly between 10 and 20s--not sure why--
+                //here we're just doing it every 15s
+                _ping.Elapsed += onPing;
+                _ping.Enabled = true;
+                _heartBeatEnabled = true;
+            }
+                
+        }
+
         //events
         public event EventHandler<MFCMessageEventArgs> Received; //tap into the message feed
         protected virtual void OnReceived(MFCMessageEventArgs e)
         {
             if (null != Received)
                 Received(this, e);
+        }
+        public event EventHandler<EventArgs> UsersProcessed;
+        protected virtual void OnUsersProcessed(EventArgs e)
+        {
+            if (null != UsersProcessed)
+                UsersProcessed(this, e);
+        }
+        public event EventHandler<EventArgs> SocketClosed;
+        protected virtual void OnSocketClosed(EventArgs e)
+        {
+            if (null != SocketClosed)
+                SocketClosed(this, e);
+        }
+        public event EventHandler<SocketErrorEventArgs> SocketError;
+        protected virtual void OnSocketError(SocketErrorEventArgs e)
+        {
+            if (null != SocketError)
+                SocketError(this, e);
         }
 
         //private methods
@@ -132,10 +181,8 @@ namespace MFCChatClient
 
         void onSocketError(object sender, SuperSocket.ClientEngine.ErrorEventArgs e)
         {
-            //TODO need to handle this better
             _ping.Enabled = false;
-            throw e.Exception;
-            //e.Exception.Message.Dump();
+            OnSocketError(new SocketErrorEventArgs() { Exception = e.Exception });
         }
 
         String queued = "";
@@ -178,10 +225,13 @@ namespace MFCChatClient
         void onSocketClosed(object sender, EventArgs e)
         {
             //TODO need to think about what we should really do here
-            _ping.Enabled = false;
-            throw new Exception("Websocket closed unexpectedly.");
+            if (_heartBeatEnabled)
+                _ping.Enabled = false;
+
+            OnSocketClosed(new EventArgs());
         }
 
+        public string Metrics { get; set; }
         void internalHandler(object sender, MFCMessageEventArgs e)
         {
             var msg = e.Message;
@@ -190,7 +240,8 @@ namespace MFCChatClient
             {
                 case MFCMessageType.FCTYPE_SESSIONSTATE:
                     {
-                        onSessionState(msg);
+                        if (_handleSessionState)
+                            onSessionState(msg);
                     }
                     break;
                 case MFCMessageType.FCTYPE_LOGIN:
@@ -226,6 +277,7 @@ namespace MFCChatClient
                             var fileno = JsonConvert.DeserializeObject<MetricsPayload>(WebUtility.UrlDecode(msg.Data)).fileno;
                             //get the file
                             var modelInfo = _client.DownloadString(String.Format(ModelUrlFormat, fileno));
+                            Metrics = modelInfo;
                             //strip out extraneous javascript
                             modelInfo = modelInfo.Replace("var g_hModelData = ", "");
                             modelInfo = modelInfo.Replace("LoadModelsFromObject(g_hModelData);", "");
@@ -246,6 +298,8 @@ namespace MFCChatClient
                                 //TODO: figure out something nicer to do here
                             }
                         }
+
+                        OnUsersProcessed(new EventArgs());
                     }
                     break;
 

@@ -19,6 +19,8 @@ namespace MFCChatClient
             JoinByName();
         }
 
+        public MFCClient Client { get { return _client; } }
+
         public event EventHandler<MFCChatMessageEventArgs> ChatMessageReceived;
         protected virtual void OnChatMessageReceived(MFCChatMessageEventArgs e)
         {
